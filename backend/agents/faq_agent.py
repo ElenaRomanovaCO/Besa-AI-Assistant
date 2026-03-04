@@ -131,26 +131,51 @@ class FAQAgent:
     ) -> Optional[FAQEntry]:
         """
         Parse raw Bedrock KB result text into an FAQEntry.
-        The content is the markdown text stored in S3.
+        Bedrock strips markdown formatting (**bold** → plain text, # → stripped),
+        so we use a line-by-line approach rather than relying on markdown syntax.
         """
         if not content:
             return None
 
-        # Extract question from markdown (# Question or ## Q: Question)
-        question_match = re.search(r"^#+ (?:Q:\s*)?(.+)$", content, re.MULTILINE)
-        question_text = question_match.group(1).strip() if question_match else "FAQ Entry"
+        lines = content.split("\n")
 
-        # Extract answer section
-        answer_match = re.search(r"## Answer\s*\n\n(.+?)(?:\n#|$)", content, re.DOTALL)
-        if not answer_match:
-            answer_match = re.search(r"A:\s*(.+?)(?:\n#|\Z)", content, re.DOTALL)
-        answer_text = answer_match.group(1).strip() if answer_match else content
+        # Extract question: first non-empty line (Bedrock strips the # heading marker)
+        question_text = next(
+            (l.strip().lstrip("#").strip() for l in lines if l.strip()), "FAQ Entry"
+        )
 
-        # Extract category if present
-        category_match = re.search(r"\*\*Category\*\*: (.+)$", content, re.MULTILINE)
+        # Extract answer: everything after the "## Answer" or "Answer" line
+        answer_lines: list[str] = []
+        in_answer = False
+        for line in lines:
+            stripped = line.strip()
+            if re.match(r"^#*\s*Answer\s*$", stripped, re.IGNORECASE):
+                in_answer = True
+                continue
+            if in_answer:
+                # Stop at the next markdown heading
+                if stripped.startswith("#"):
+                    break
+                answer_lines.append(line)
+
+        if answer_lines:
+            answer_text = "\n".join(answer_lines).strip()
+        else:
+            # Fallback: strip known metadata lines (question, Category, Tags headings)
+            skip = re.compile(
+                r"^(#+\s*|category\s*:|tags\s*:|\*\*category\*\*:|\*\*tags\*\*:)",
+                re.IGNORECASE,
+            )
+            body = [l for l in lines if l.strip() and not skip.match(l.strip())]
+            # Drop the first line (question text already captured above)
+            answer_text = "\n".join(body[1:]).strip() if len(body) > 1 else content
+
+        # Extract category (plain text after Bedrock strips bold markers)
+        category_match = re.search(
+            r"\*?\*?Category\*?\*?:\s*(.+)$", content, re.MULTILINE | re.IGNORECASE
+        )
         category = category_match.group(1).strip() if category_match else "General"
 
-        # Derive ID from S3 URI
         entry_id = uri.split("/")[-1].replace(".md", "") if uri else "faq-unknown"
 
         return FAQEntry(
