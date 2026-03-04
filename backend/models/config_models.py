@@ -35,7 +35,7 @@ class AgentConfig:
     enable_faq_agent: bool = True
     enable_discord_agent: bool = True
     enable_reasoning_agent: bool = True
-    enable_aws_docs_agent: bool = True
+    enable_aws_docs_agent: bool = False  # Requires awslabs MCP package in layer; disabled until added
     enable_online_search_agent: bool = False
 
     def active_agents(self) -> list[str]:
@@ -89,6 +89,7 @@ class SystemConfig:
         """Serialize for DynamoDB storage."""
         return {
             "config_id": self.config_id,
+            "sk": "config",
             "faq_threshold": str(self.thresholds.faq_similarity_threshold),
             "discord_threshold": str(self.thresholds.discord_overlap_threshold),
             "query_expansion_depth": self.thresholds.query_expansion_depth,

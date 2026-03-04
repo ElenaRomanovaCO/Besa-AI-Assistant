@@ -15,7 +15,7 @@ from backend.models.agent_models import SourceResult, SourceType
 logger = logging.getLogger(__name__)
 
 # Claude Sonnet 4.6 via Amazon Bedrock (cross-region inference profile)
-_CLAUDE_SONNET_MODEL_ID = "us.anthropic.claude-sonnet-4-6-20251101:0"
+_CLAUDE_SONNET_MODEL_ID = "us.anthropic.claude-sonnet-4-6"
 
 _REASONING_SYSTEM_PROMPT = """You are BeSa AI, an expert AWS technical assistant for workshop participants.
 

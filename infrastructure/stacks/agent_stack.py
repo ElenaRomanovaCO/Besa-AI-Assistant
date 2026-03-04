@@ -245,8 +245,8 @@ class AgentStack(Stack):
                 actions=[
                     "bedrock:InvokeModel",
                     "bedrock:InvokeModelWithResponseStream",
-                    "bedrock-agent-runtime:Retrieve",
-                    "bedrock-agent-runtime:RetrieveAndGenerate",
+                    "bedrock:Retrieve",
+                    "bedrock:RetrieveAndGenerate",
                 ],
                 resources=["*"],
             )

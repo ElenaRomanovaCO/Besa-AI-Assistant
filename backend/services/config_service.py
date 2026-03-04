@@ -49,7 +49,7 @@ class ConfigService:
             return self._cache  # type: ignore[return-value]
 
         try:
-            response = self._table.get_item(Key={"config_id": "system"})
+            response = self._table.get_item(Key={"config_id": "system", "sk": "config"})
             item = response.get("Item")
             if item:
                 config = SystemConfig.from_dynamodb_item(item)
