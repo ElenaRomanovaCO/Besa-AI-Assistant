@@ -194,9 +194,9 @@ class AdminStack(Stack):
             iam.PolicyStatement(
                 effect=iam.Effect.ALLOW,
                 actions=[
-                    "bedrock-agent:StartIngestionJob",
-                    "bedrock-agent:GetIngestionJob",
-                    "bedrock-agent:ListIngestionJobs",
+                    "bedrock:StartIngestionJob",
+                    "bedrock:GetIngestionJob",
+                    "bedrock:ListIngestionJobs",
                 ],
                 resources=["*"],
             )
