@@ -28,12 +28,24 @@ export function configureAmplify() {
 }
 
 export async function login(email: string, password: string) {
-  const result = await signIn({
-    username: email,
-    password,
-    options: { authFlowType: "USER_SRP_AUTH" },
-  });
-  return result;
+  try {
+    return await signIn({
+      username: email,
+      password,
+      options: { authFlowType: "USER_SRP_AUTH" },
+    });
+  } catch (err: unknown) {
+    // Amplify v6 throws this when a previous sign-in is still cached
+    if (err instanceof Error && err.name === "UserAlreadyAuthenticatedException") {
+      await signOut();
+      return await signIn({
+        username: email,
+        password,
+        options: { authFlowType: "USER_SRP_AUTH" },
+      });
+    }
+    throw err;
+  }
 }
 
 export async function logout() {
