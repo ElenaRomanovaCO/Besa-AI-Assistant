@@ -1,13 +1,7 @@
-import type { NextConfig } from "next";
-
-const nextConfig: NextConfig = {
+/** @type {import('next').NextConfig} */
+const nextConfig = {
   reactStrictMode: true,
-  // Amplify Hosting supports both SSR and static — using static for simplicity
-  // Change to 'standalone' if SSR features are needed
   output: "standalone",
-  experimental: {
-    serverComponentsExternalPackages: [],
-  },
   // Security headers
   async headers() {
     return [
