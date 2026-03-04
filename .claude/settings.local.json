@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls:*)",
+      "WebSearch",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:awslabs.github.io)",
+      "WebFetch(domain:strandsagents.com)",
+      "WebFetch(domain:pypi.org)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(aws cloudformation:*)",
+      "Bash(docker:*)",
+      "WebFetch(domain:dev.to)",
+      "WebFetch(domain:aws.amazon.com)",
+      "Bash(aws:*)",
+      "Bash(source:*)",
+      "Bash(python3:*)",
+      "Bash(pip install:*)"
+    ]
+  }
+}

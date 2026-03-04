@@ -1,0 +1,32 @@
+# AWS SDK
+boto3>=1.34.0
+botocore>=1.34.0
+
+# AWS Strands Agents framework
+strands-agents>=0.1.0
+
+# MCP (Model Context Protocol) client — used by Strands MCPClient
+# strands-agents depends on this, but we pin it explicitly for Lambda layer stability
+mcp>=1.0.0
+
+# AWS Documentation MCP server — provides search_documentation and read_documentation tools
+# Used by AWSDocsAgent to search real AWS documentation pages at runtime
+# In Lambda: runs as a subprocess via stdio transport (installed in the Lambda layer)
+awslabs.aws-documentation-mcp-server>=1.1.0
+
+# Discord API client (for outbound REST API calls)
+discord.py>=2.4.0
+
+# HTTP client (async-capable, used by Discord service)
+httpx>=0.27.0
+
+# Cryptographic signature verification for Discord webhooks
+PyNaCl>=1.5.0
+
+# Data validation
+pydantic>=2.7.0
+
+# FastAPI (for optional local development server / testing)
+fastapi>=0.111.0
+uvicorn>=0.30.0
+mangum>=0.17.0  # ASGI adapter for Lambda + API Gateway
