@@ -1,17 +1,12 @@
 "use client";
 
 import "./globals.css";
-import { useEffect } from "react";
 import { Toaster } from "react-hot-toast";
 import { configureAmplify } from "@/lib/auth";
 
-// Configure Amplify on app mount (client component)
-function AmplifyProvider({ children }: { children: React.ReactNode }) {
-  useEffect(() => {
-    configureAmplify();
-  }, []);
-  return <>{children}</>;
-}
+// Configure Amplify immediately at module load time so all SWR hooks
+// that fire on first render already have a configured Amplify instance.
+configureAmplify();
 
 export default function RootLayout({
   children,
@@ -31,7 +26,7 @@ export default function RootLayout({
         />
       </head>
       <body>
-        <AmplifyProvider>
+        <>
           {children}
           <Toaster
             position="top-right"
@@ -46,7 +41,7 @@ export default function RootLayout({
               error: { iconTheme: { primary: "#ef4444", secondary: "#f9fafb" } },
             }}
           />
-        </AmplifyProvider>
+        </>
       </body>
     </html>
   );

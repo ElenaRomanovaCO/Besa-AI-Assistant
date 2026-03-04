@@ -94,7 +94,7 @@ class AgentStack(Stack):
         # ------------------------------------------------------------------ #
         # Lambda Layer — shared Python dependencies
         # ------------------------------------------------------------------ #
-        dependencies_layer = lambda_.LayerVersion(
+        self.dependencies_layer = lambda_.LayerVersion(
             self,
             "DependenciesLayer",
             layer_version_name=f"{project_name}-dependencies",
@@ -151,7 +151,7 @@ class AgentStack(Stack):
         # Common Lambda configuration
         common_lambda_kwargs = dict(
             runtime=lambda_.Runtime.PYTHON_3_12,
-            layers=[dependencies_layer],
+            layers=[self.dependencies_layer],
             vpc=network.vpc,
             vpc_subnets=ec2.SubnetSelection(
                 subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS

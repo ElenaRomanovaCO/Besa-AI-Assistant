@@ -188,7 +188,7 @@ class FAQIngestionService:
         try:
             self._table.put_item(
                 Item={
-                    "pk": "faq_metadata",
+                    "config_id": "faq_metadata",
                     "sk": "latest",
                     "entry_count": entry_count,
                     "sync_job_id": sync_job_id or "",
@@ -206,7 +206,7 @@ class FAQIngestionService:
         """
         try:
             response = self._table.get_item(
-                Key={"pk": "faq_metadata", "sk": "latest"}
+                Key={"config_id": "faq_metadata", "sk": "latest"}
             )
             item = response.get("Item", {})
             if not item:
@@ -221,7 +221,7 @@ class FAQIngestionService:
                 if live_status != status:
                     item["status"] = live_status
                     self._table.update_item(
-                        Key={"pk": "faq_metadata", "sk": "latest"},
+                        Key={"config_id": "faq_metadata", "sk": "latest"},
                         UpdateExpression="SET #s = :s",
                         ExpressionAttributeNames={"#s": "status"},
                         ExpressionAttributeValues={":s": live_status},

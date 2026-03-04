@@ -55,10 +55,12 @@ export const api = {
   // ---- FAQ ----
   faq: {
     upload: (fileContent: string | ArrayBuffer, format: string) => {
+      // All FAQ formats (csv, json, md) are text. Decode to a string so
+      // API Gateway always sees a plain text body (avoids binary encoding issues).
       const body =
         fileContent instanceof ArrayBuffer
-          ? fileContent
-          : new TextEncoder().encode(fileContent);
+          ? new TextDecoder("utf-8").decode(fileContent)
+          : fileContent;
       return request<{
         message: string;
         entry_count: number;
@@ -66,9 +68,9 @@ export const api = {
         status: string;
       }>(`/api/faq/upload?format=${format}`, {
         method: "POST",
-        body: body as BodyInit,
+        body,
         headers: {
-          "Content-Type": "application/octet-stream",
+          "Content-Type": "text/plain",
         },
       });
     },

@@ -42,6 +42,7 @@ class AdminStack(Stack):
         admin_email: str,
         discord_application_id: str,
         discord_guild_id: str,
+        dependencies_layer,
         **kwargs,
     ) -> None:
         super().__init__(scope, construct_id, **kwargs)
@@ -160,6 +161,7 @@ class AdminStack(Stack):
             function_name=f"{project_name}-admin-api",
             handler="backend.handlers.admin_handler.handler",
             runtime=lambda_.Runtime.PYTHON_3_12,
+            layers=[dependencies_layer],
             code=lambda_.Code.from_asset(
                 "..",
                 exclude=[
@@ -234,9 +236,8 @@ class AdminStack(Stack):
             ),
             default_cors_preflight_options=apigw.CorsOptions(
                 allow_origins=[
-                    # Set to Amplify app domain after deployment
-                    "https://*.amplifyapp.com",
-                    "http://localhost:3000",  # Local development
+                    "https://main.d11zobutovmg96.amplifyapp.com",
+                    "http://localhost:3000",
                 ],
                 allow_methods=apigw.Cors.ALL_METHODS,
                 allow_headers=["Content-Type", "Authorization"],
