@@ -7,7 +7,7 @@ import { getIdToken } from "./auth";
 import type {
   SystemConfig,
   FAQSyncStatus,
-  FAQEntry,
+  FAQFile,
   DiscordChannel,
   QueryLog,
   AnalyticsOverview,
@@ -54,29 +54,42 @@ export const api = {
 
   // ---- FAQ ----
   faq: {
-    upload: (fileContent: string | ArrayBuffer, format: string) => {
-      // All FAQ formats (csv, json, md) are text. Decode to a string so
-      // API Gateway always sees a plain text body (avoids binary encoding issues).
+    upload: async (
+      fileContent: string | ArrayBuffer,
+      filename: string,
+      overwrite = false
+    ): Promise<{
+      ok: boolean;
+      status: number;
+      data: Record<string, unknown>;
+    }> => {
+      const token = await getIdToken();
+      if (!token) throw new Error("Not authenticated");
       const body =
         fileContent instanceof ArrayBuffer
           ? new TextDecoder("utf-8").decode(fileContent)
           : fileContent;
-      return request<{
-        message: string;
-        entry_count: number;
-        sync_job_id: string;
-        status: string;
-      }>(`/api/faq/upload?format=${format}`, {
+      const params = new URLSearchParams({ filename });
+      if (overwrite) params.set("overwrite", "true");
+      const response = await fetch(`${API_BASE}/api/faq/upload?${params}`, {
         method: "POST",
-        body,
         headers: {
           "Content-Type": "text/plain",
+          Authorization: token,
         },
+        body,
       });
+      const data = await response.json().catch(() => ({}));
+      return { ok: response.ok, status: response.status, data };
     },
     syncStatus: () => request<FAQSyncStatus>("/api/faq/sync-status"),
-    entries: () =>
-      request<{ entries: FAQEntry[]; total: number }>("/api/faq/entries"),
+    files: () =>
+      request<{ files: FAQFile[]; total: number }>("/api/faq/files"),
+    deleteFile: (filename: string) =>
+      request<{ message: string }>(
+        `/api/faq/files?filename=${encodeURIComponent(filename)}`,
+        { method: "DELETE" }
+      ),
   },
 
   // ---- Discord ----

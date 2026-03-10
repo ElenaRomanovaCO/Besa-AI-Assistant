@@ -46,20 +46,28 @@ export interface SystemConfig {
 
 // ---- FAQ ----
 
+export interface FAQFile {
+  filename: string;
+  size: number;
+  last_modified: string;
+  uploaded_by: string;
+}
+
+export interface FAQSyncStatus {
+  status: "PENDING" | "SYNCING" | "COMPLETED" | "FAILED" | "NO_DATA" | "ERROR";
+  entry_count?: number;
+  sync_job_id?: string;
+  last_updated?: string;
+  uploaded_by?: string;
+  error?: string;
+}
+
+/** @deprecated use FAQFile */
 export interface FAQEntry {
   id: string;
   s3_key: string;
   size: number;
   last_modified: string;
-}
-
-export interface FAQSyncStatus {
-  status: "PENDING" | "SYNCING" | "COMPLETED" | "FAILED" | "NO_DATA" | "ERROR";
-  entry_count: number;
-  sync_job_id?: string;
-  last_updated?: string;
-  uploaded_by?: string;
-  error?: string;
 }
 
 // ---- Discord ----
