@@ -252,8 +252,8 @@ class StorageStack(Stack):
 
         # Bedrock Data Source — managed outside CDK (chunking config is immutable;
         # recreating via CLI avoids cross-stack export conflicts on updates).
-        # DataSource ID S1TRJSMVG8 — FIXED_SIZE 500 tokens, 20% overlap.
-        self.faq_data_source_id = "S1TRJSMVG8"
+        # DataSource ID 3GXCRPUAIT — FIXED_SIZE 250 tokens, 20% overlap.
+        self.faq_data_source_id = "3GXCRPUAIT"
 
         Tags.of(self).add("Project", project_name)
         Tags.of(self).add("Component", "Storage")
