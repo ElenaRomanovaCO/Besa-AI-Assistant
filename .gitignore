@@ -23,11 +23,11 @@ pip-wheel-metadata/
 .venv/
 venv/
 env/
-.env
-.venv/
 
 # Environment variable files (contain secrets)
+.env
 .env.local
+.env.example
 .env.*.local
 frontend/.env.local
 frontend/.env.production
@@ -68,6 +68,20 @@ yarn-error.log*
 *~
 .DS_Store
 Thumbs.db
+
+# Scratch / test files
+estimate.md
+messages.md
+test-faq.md
+testing.md
+testing_2.md
+testing_discord.md
+test-data
+test-data/
+
+# Specs / tool configs
+.kiro/
+.claude/settings.local.json
 
 # Secrets (never commit these)
 *.pem

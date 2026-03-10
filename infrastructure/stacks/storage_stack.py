@@ -212,6 +212,7 @@ class StorageStack(Stack):
                     "s3vectors:GetVectors",
                     "s3vectors:PutVectors",
                     "s3vectors:ListVectors",
+                    "s3vectors:DeleteVectors",
                 ],
                 resources=[
                     self.vector_bucket.attr_vector_bucket_arn,
