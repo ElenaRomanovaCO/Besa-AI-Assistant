@@ -69,13 +69,10 @@ yarn-error.log*
 .DS_Store
 Thumbs.db
 
+# Markdown files
+*.md
+
 # Scratch / test files
-estimate.md
-messages.md
-test-faq.md
-testing.md
-testing_2.md
-testing_discord.md
 test-data
 test-data/
 
