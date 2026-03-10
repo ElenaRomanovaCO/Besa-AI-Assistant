@@ -151,7 +151,7 @@ class AdminStack(Stack):
             "RATE_LIMIT_TABLE_NAME": storage.rate_limit_table.table_name,
             "FAQ_BUCKET_NAME": storage.faq_bucket.bucket_name,
             "BEDROCK_KNOWLEDGE_BASE_ID": storage.knowledge_base.attr_knowledge_base_id,
-            "BEDROCK_DATA_SOURCE_ID": storage.faq_data_source.attr_data_source_id,
+            "BEDROCK_DATA_SOURCE_ID": storage.faq_data_source_id,
             "LOG_LEVEL": "INFO",
         }
 

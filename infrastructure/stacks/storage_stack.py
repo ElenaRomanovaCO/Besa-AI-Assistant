@@ -250,30 +250,10 @@ class StorageStack(Stack):
         self.knowledge_base.add_dependency(self.vector_index)
         self.knowledge_base.node.add_dependency(self.kb_role)
 
-        # Bedrock Data Source — S3 bucket as FAQ source
-        self.faq_data_source = bedrock.CfnDataSource(
-            self,
-            "FAQDataSource",
-            knowledge_base_id=self.knowledge_base.attr_knowledge_base_id,
-            name=f"{project_name}-faq-s3-source",
-            description="FAQ files stored in S3 (markdown format)",
-            data_source_configuration=bedrock.CfnDataSource.DataSourceConfigurationProperty(
-                type="S3",
-                s3_configuration=bedrock.CfnDataSource.S3DataSourceConfigurationProperty(
-                    bucket_arn=self.faq_bucket.bucket_arn,
-                    inclusion_prefixes=["faq/"],
-                ),
-            ),
-            vector_ingestion_configuration=bedrock.CfnDataSource.VectorIngestionConfigurationProperty(
-                chunking_configuration=bedrock.CfnDataSource.ChunkingConfigurationProperty(
-                    chunking_strategy="FIXED_SIZE",
-                    fixed_size_chunking_configuration=bedrock.CfnDataSource.FixedSizeChunkingConfigurationProperty(
-                        max_tokens=300,
-                        overlap_percentage=20,
-                    ),
-                )
-            ),
-        )
+        # Bedrock Data Source — managed outside CDK (chunking config is immutable;
+        # recreating via CLI avoids cross-stack export conflicts on updates).
+        # DataSource ID S1TRJSMVG8 — FIXED_SIZE 500 tokens, 20% overlap.
+        self.faq_data_source_id = "S1TRJSMVG8"
 
         Tags.of(self).add("Project", project_name)
         Tags.of(self).add("Component", "Storage")

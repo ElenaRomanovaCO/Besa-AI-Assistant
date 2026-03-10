@@ -143,7 +143,7 @@ class AgentStack(Stack):
             "RATE_LIMIT_TABLE_NAME": storage.rate_limit_table.table_name,
             "STATE_TABLE_NAME": storage.state_table.table_name,
             "BEDROCK_KNOWLEDGE_BASE_ID": storage.knowledge_base.attr_knowledge_base_id,
-            "BEDROCK_DATA_SOURCE_ID": storage.faq_data_source.attr_data_source_id,
+            "BEDROCK_DATA_SOURCE_ID": storage.faq_data_source_id,
             "FAQ_BUCKET_NAME": storage.faq_bucket.bucket_name,
             "LOG_LEVEL": "INFO",
         }
