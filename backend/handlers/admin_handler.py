@@ -2,15 +2,16 @@
 Lambda handler for admin REST API endpoints.
 
 Endpoints:
-  GET  /api/configuration         — fetch system config
-  PUT  /api/configuration         — update system config
-  POST /api/faq/upload            — upload FAQ file (returns presigned URL or processes directly)
-  GET  /api/faq/sync-status       — check Bedrock KB sync status
-  GET  /api/faq/entries           — list FAQ entries (from S3)
-  GET  /api/discord/channels      — list guild channels
-  GET  /api/logs/queries          — paginated query log
-  GET  /api/analytics/overview    — analytics summary
-  POST /api/rate-limits/reset     — reset rate limit for a user (Admin only)
+  GET    /api/configuration       — fetch system config
+  PUT    /api/configuration       — update system config
+  POST   /api/faq/upload          — upload raw FAQ file (?filename=, ?overwrite=true)
+  GET    /api/faq/sync-status     — check Bedrock KB sync status
+  GET    /api/faq/files           — list files in Knowledge Base
+  DELETE /api/faq/files           — delete a file (?filename=)
+  GET    /api/discord/channels    — list guild channels
+  GET    /api/logs/queries        — paginated query log
+  GET    /api/analytics/overview  — analytics summary
+  POST   /api/rate-limits/reset   — reset rate limit for a user (Admin only)
 """
 
 from __future__ import annotations
@@ -149,7 +150,8 @@ def handler(event: dict, context: Any) -> dict:
         ("PUT", "/api/configuration"): handle_put_config,
         ("POST", "/api/faq/upload"): handle_faq_upload,
         ("GET", "/api/faq/sync-status"): handle_faq_sync_status,
-        ("GET", "/api/faq/entries"): handle_faq_entries,
+        ("GET", "/api/faq/files"): handle_faq_files,
+        ("DELETE", "/api/faq/files"): handle_faq_files,
         ("GET", "/api/discord/channels"): handle_discord_channels,
         ("GET", "/api/logs/queries"): handle_query_logs,
         ("GET", "/api/analytics/overview"): handle_analytics,
@@ -232,45 +234,38 @@ def handle_put_config(event: dict) -> dict:
 
 
 def handle_faq_upload(event: dict) -> dict:
-    """POST /api/faq/upload — upload a FAQ file and trigger Bedrock KB sync."""
+    """POST /api/faq/upload — upload a raw FAQ file and trigger Bedrock KB sync."""
     caller = _get_caller_user(event)
+    params = event.get("queryStringParameters") or {}
+    filename = params.get("filename", "")
+    overwrite = params.get("overwrite", "false").lower() == "true"
+
+    if not filename:
+        return _response(400, {"error": "filename query parameter is required"})
+    if not filename.endswith(".md"):
+        return _response(400, {"error": "Only .md files are supported"})
+
+    # Check for duplicate before reading the body
+    svc = _get_faq_service()
+    if not overwrite and svc.file_exists(filename):
+        return _response(409, {
+            "error": "file_exists",
+            "filename": filename,
+            "message": f"{filename} already exists in the knowledge base",
+        })
+
     body_raw = event.get("body", "")
     is_base64 = event.get("isBase64Encoded", False)
+    raw_content = base64.b64decode(body_raw) if is_base64 else body_raw.encode("utf-8")
 
-    if is_base64:
-        file_content = base64.b64decode(body_raw)
-    else:
-        file_content = body_raw.encode("utf-8")
-
-    # Get file format from query parameters or Content-Type header
-    params = event.get("queryStringParameters") or {}
-    file_format = params.get("format", "")
-    if not file_format:
-        content_type = event.get("headers", {}).get("content-type", "")
-        format_map = {
-            "text/csv": "csv",
-            "application/json": "json",
-            "text/markdown": "md",
-        }
-        file_format = format_map.get(content_type, "json")
-
-    result = _get_faq_service().upload_and_sync(
-        file_content=file_content,
-        file_format=file_format,
-        uploaded_by=caller,
-    )
-
+    result = svc.upload_file(raw_content, filename, uploaded_by=caller)
     if result.success:
         return _response(200, {
-            "message": "FAQ uploaded and sync started",
-            "entry_count": result.entry_count,
+            "message": f"{filename} uploaded and sync started",
             "sync_job_id": result.sync_job_id,
             "status": result.status.value,
         })
-    return _response(422, {
-        "error": result.error_message or "FAQ upload failed",
-        "entry_count": result.entry_count,
-    })
+    return _response(500, {"error": result.error_message or "Upload failed"})
 
 
 def handle_faq_sync_status(event: dict) -> dict:
@@ -279,25 +274,27 @@ def handle_faq_sync_status(event: dict) -> dict:
     return _response(200, status)
 
 
-def handle_faq_entries(event: dict) -> dict:
-    """GET /api/faq/entries — list FAQ entries from S3 (metadata only)."""
-    s3 = boto3.client("s3", region_name=_AWS_REGION)
-    try:
-        response = s3.list_objects_v2(Bucket=_FAQ_BUCKET, Prefix="faq/")
-        entries = []
-        for obj in response.get("Contents", []):
-            key = obj["Key"]
-            if key.endswith(".md"):
-                entries.append({
-                    "id": key.replace("faq/", "").replace(".md", ""),
-                    "s3_key": key,
-                    "size": obj["Size"],
-                    "last_modified": obj["LastModified"].isoformat(),
-                })
-        return _response(200, {"entries": entries, "total": len(entries)})
-    except Exception as e:
-        logger.error("Failed to list FAQ entries: %s", e)
-        return _response(500, {"error": "Failed to list FAQ entries"})
+def handle_faq_files(event: dict) -> dict:
+    """GET /api/faq/files — list files in the Knowledge Base S3 prefix.
+       DELETE /api/faq/files?filename=x — delete a specific file."""
+    method = event.get("httpMethod", "GET").upper()
+    svc = _get_faq_service()
+
+    if method == "GET":
+        files = svc.list_files()
+        return _response(200, {"files": files, "total": len(files)})
+
+    if method == "DELETE":
+        params = event.get("queryStringParameters") or {}
+        filename = params.get("filename", "")
+        if not filename:
+            return _response(400, {"error": "filename query parameter is required"})
+        ok = svc.delete_file(filename)
+        if ok:
+            return _response(200, {"message": f"{filename} deleted"})
+        return _response(500, {"error": f"Failed to delete {filename}"})
+
+    return _response(405, {"error": "Method not allowed"})
 
 
 def handle_discord_channels(event: dict) -> dict:

@@ -2,18 +2,14 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import time
-import uuid
 from dataclasses import dataclass
 from enum import Enum
 from typing import Optional
 
 import boto3
 from botocore.exceptions import ClientError
-
-from backend.models.faq_models import FAQEntry, FAQFileParser
 
 logger = logging.getLogger(__name__)
 
@@ -36,8 +32,8 @@ class FAQSyncResult:
 
 class FAQIngestionService:
     """
-    Handles FAQ file upload to S3 and triggering Bedrock Knowledge Base sync.
-    Stores sync metadata in DynamoDB for status polling.
+    Handles raw FAQ file upload to S3 and triggering Bedrock Knowledge Base sync.
+    Bedrock handles chunking and embedding natively — no file parsing required.
     """
 
     def __init__(
@@ -51,171 +47,130 @@ class FAQIngestionService:
         self._bucket = s3_bucket
         self._knowledge_base_id = knowledge_base_id
         self._data_source_id = data_source_id
-        self._metadata_table = metadata_table_name
         self._s3 = boto3.client("s3", region_name=region)
         self._bedrock_agent = boto3.client("bedrock-agent", region_name=region)
         self._dynamodb = boto3.resource("dynamodb", region_name=region)
         self._table = self._dynamodb.Table(metadata_table_name)
 
-    def upload_and_sync(
+    # ------------------------------------------------------------------ #
+    # Public API
+    # ------------------------------------------------------------------ #
+
+    def file_exists(self, filename: str) -> bool:
+        """Check if faq/{filename} already exists in S3."""
+        try:
+            self._s3.head_object(Bucket=self._bucket, Key=f"faq/{filename}")
+            return True
+        except ClientError:
+            return False
+
+    def upload_file(
         self,
-        file_content: bytes,
-        file_format: str,
+        raw_content: bytes,
+        filename: str,
         uploaded_by: str = "admin",
     ) -> FAQSyncResult:
-        """
-        Parse FAQ file, upload to S3, trigger Bedrock KB sync, record metadata.
-        """
-        # Parse and validate
+        """Upload raw file to S3 as faq/{filename} and trigger Bedrock sync."""
         try:
-            text_content = file_content.decode("utf-8")
-            entries = FAQFileParser.parse(text_content, file_format)
-        except Exception as e:
-            return FAQSyncResult(
-                success=False,
-                entry_count=0,
-                sync_job_id=None,
-                status=SyncStatus.FAILED,
-                error_message=f"Parse error: {e}",
+            self._s3.put_object(
+                Bucket=self._bucket,
+                Key=f"faq/{filename}",
+                Body=raw_content,
+                ContentType="text/markdown",
+                Metadata={"uploaded-by": uploaded_by},
             )
-
-        validation_errors = FAQFileParser.validate(entries)
-        if validation_errors:
-            return FAQSyncResult(
-                success=False,
-                entry_count=len(entries),
-                sync_job_id=None,
-                status=SyncStatus.FAILED,
-                error_message=f"Validation errors: {'; '.join(validation_errors[:5])}",
-            )
-
-        if not entries:
-            return FAQSyncResult(
-                success=False,
-                entry_count=0,
-                sync_job_id=None,
-                status=SyncStatus.FAILED,
-                error_message="No FAQ entries found in file.",
-            )
-
-        # Upload each entry as a separate markdown file to S3
-        # (Bedrock KB ingests files from the S3 prefix)
-        upload_id = str(uuid.uuid4())[:8]
-        try:
-            self._upload_entries_to_s3(entries, upload_id)
-        except Exception as e:
+            logger.info("Uploaded faq/%s to s3://%s", filename, self._bucket)
+        except ClientError as e:
             logger.error("S3 upload failed: %s", e)
             return FAQSyncResult(
                 success=False,
-                entry_count=len(entries),
+                entry_count=0,
                 sync_job_id=None,
                 status=SyncStatus.FAILED,
                 error_message=f"S3 upload error: {e}",
             )
 
-        # Trigger Bedrock Knowledge Base sync
+        sync_job_id = None
         try:
             sync_job_id = self._trigger_bedrock_sync()
         except Exception as e:
             logger.error("Bedrock sync trigger failed: %s", e)
-            sync_job_id = None
 
-        # Record metadata in DynamoDB
         status = SyncStatus.SYNCING if sync_job_id else SyncStatus.FAILED
         self._update_metadata(
-            entry_count=len(entries),
             sync_job_id=sync_job_id,
             status=status,
             uploaded_by=uploaded_by,
         )
-
         return FAQSyncResult(
             success=sync_job_id is not None,
-            entry_count=len(entries),
+            entry_count=0,
             sync_job_id=sync_job_id,
             status=status,
         )
 
-    def _upload_entries_to_s3(self, entries: list[FAQEntry], upload_id: str) -> None:
-        """Upload FAQ entries as individual markdown files under faq/ prefix."""
-        # First, delete existing FAQ files (replace strategy)
-        self._clear_faq_prefix()
-
-        for entry in entries:
-            key = f"faq/{entry.id}.md"
-            content = entry.to_markdown().encode("utf-8")
-            self._s3.put_object(
-                Bucket=self._bucket,
-                Key=key,
-                Body=content,
-                ContentType="text/markdown",
-                Metadata={
-                    "entry-id": entry.id,
-                    "upload-id": upload_id,
-                    "category": entry.category,
-                },
-            )
-        logger.info("Uploaded %d FAQ entries to s3://%s/faq/", len(entries), self._bucket)
-
-    def _clear_faq_prefix(self) -> None:
-        """Delete all objects under faq/ prefix (replace on upload)."""
-        paginator = self._s3.get_paginator("list_objects_v2")
-        for page in paginator.paginate(Bucket=self._bucket, Prefix="faq/"):
-            objects = [{"Key": obj["Key"]} for obj in page.get("Contents", [])]
-            if objects:
-                self._s3.delete_objects(
-                    Bucket=self._bucket, Delete={"Objects": objects}
-                )
-
-    def _trigger_bedrock_sync(self) -> str:
-        """Start a Bedrock Knowledge Base ingestion job and return the job ID."""
-        response = self._bedrock_agent.start_ingestion_job(
-            knowledgeBaseId=self._knowledge_base_id,
-            dataSourceId=self._data_source_id,
-        )
-        job_id = response["ingestionJob"]["ingestionJobId"]
-        logger.info("Bedrock KB sync started: job_id=%s", job_id)
-        return job_id
-
-    def _update_metadata(
-        self,
-        entry_count: int,
-        sync_job_id: Optional[str],
-        status: SyncStatus,
-        uploaded_by: str,
-    ) -> None:
-        """Write FAQ sync metadata to DynamoDB."""
+    def list_files(self) -> list[dict]:
+        """List all files under the faq/ prefix with S3 metadata."""
         try:
-            self._table.put_item(
-                Item={
-                    "config_id": "faq_metadata",
-                    "sk": "latest",
-                    "entry_count": entry_count,
-                    "sync_job_id": sync_job_id or "",
-                    "status": status.value,
-                    "uploaded_by": uploaded_by,
-                    "last_updated": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                }
+            response = self._s3.list_objects_v2(
+                Bucket=self._bucket, Prefix="faq/"
             )
+            files = []
+            for obj in response.get("Contents", []):
+                key = obj["Key"]
+                filename = key[len("faq/"):]
+                if not filename:
+                    continue  # skip the faq/ prefix entry itself
+                try:
+                    head = self._s3.head_object(Bucket=self._bucket, Key=key)
+                    uploaded_by = head.get("Metadata", {}).get("uploaded-by", "")
+                except Exception:
+                    uploaded_by = ""
+                files.append({
+                    "filename": filename,
+                    "size": obj["Size"],
+                    "last_modified": obj["LastModified"].isoformat(),
+                    "uploaded_by": uploaded_by,
+                })
+            return files
         except ClientError as e:
-            logger.error("Failed to update FAQ metadata in DynamoDB: %s", e)
+            logger.error("Failed to list faq/ objects: %s", e)
+            return []
+
+    def delete_file(self, filename: str) -> bool:
+        """Delete faq/{filename} from S3 and trigger a Bedrock re-sync."""
+        try:
+            self._s3.delete_object(Bucket=self._bucket, Key=f"faq/{filename}")
+            logger.info("Deleted faq/%s from s3://%s", filename, self._bucket)
+        except ClientError as e:
+            logger.error("Failed to delete faq/%s: %s", filename, e)
+            return False
+
+        try:
+            sync_job_id = self._trigger_bedrock_sync()
+            self._update_metadata(
+                sync_job_id=sync_job_id,
+                status=SyncStatus.SYNCING,
+                uploaded_by="admin",
+            )
+        except Exception as e:
+            logger.error("Bedrock sync after delete failed: %s", e)
+
+        return True
 
     def get_sync_status(self) -> dict:
-        """
-        Check current sync status. Polls Bedrock if a sync job is in progress.
-        """
+        """Check current sync status; polls Bedrock if a sync job is in progress."""
         try:
             response = self._table.get_item(
                 Key={"config_id": "faq_metadata", "sk": "latest"}
             )
             item = response.get("Item", {})
             if not item:
-                return {"status": "NO_DATA", "entry_count": 0}
+                return {"status": "NO_DATA"}
 
             status = item.get("status", SyncStatus.PENDING.value)
             sync_job_id = item.get("sync_job_id", "")
 
-            # Poll Bedrock for live status if job is in progress
             if status == SyncStatus.SYNCING.value and sync_job_id:
                 live_status = self._poll_bedrock_job(sync_job_id)
                 if live_status != status:
@@ -229,7 +184,6 @@ class FAQIngestionService:
 
             return {
                 "status": item.get("status"),
-                "entry_count": int(item.get("entry_count", 0)),
                 "sync_job_id": sync_job_id,
                 "last_updated": item.get("last_updated"),
                 "uploaded_by": item.get("uploaded_by"),
@@ -237,6 +191,41 @@ class FAQIngestionService:
         except Exception as e:
             logger.error("Error fetching sync status: %s", e)
             return {"status": "ERROR", "error": str(e)}
+
+    # ------------------------------------------------------------------ #
+    # Private helpers
+    # ------------------------------------------------------------------ #
+
+    def _trigger_bedrock_sync(self) -> str:
+        """Start a Bedrock Knowledge Base ingestion job and return the job ID."""
+        response = self._bedrock_agent.start_ingestion_job(
+            knowledgeBaseId=self._knowledge_base_id,
+            dataSourceId=self._data_source_id,
+        )
+        job_id = response["ingestionJob"]["ingestionJobId"]
+        logger.info("Bedrock KB sync started: job_id=%s", job_id)
+        return job_id
+
+    def _update_metadata(
+        self,
+        sync_job_id: Optional[str],
+        status: SyncStatus,
+        uploaded_by: str,
+    ) -> None:
+        """Write FAQ sync metadata to DynamoDB."""
+        try:
+            self._table.put_item(
+                Item={
+                    "config_id": "faq_metadata",
+                    "sk": "latest",
+                    "sync_job_id": sync_job_id or "",
+                    "status": status.value,
+                    "uploaded_by": uploaded_by,
+                    "last_updated": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                }
+            )
+        except ClientError as e:
+            logger.error("Failed to update FAQ metadata in DynamoDB: %s", e)
 
     def _poll_bedrock_job(self, job_id: str) -> str:
         """Query Bedrock for ingestion job status."""
@@ -257,19 +246,3 @@ class FAQIngestionService:
         except Exception as e:
             logger.error("Error polling Bedrock job %s: %s", job_id, e)
             return SyncStatus.SYNCING.value
-
-    def generate_presigned_upload_url(
-        self, file_format: str, expiry_seconds: int = 300
-    ) -> str:
-        """Generate a presigned S3 URL for direct browser uploads."""
-        key = f"uploads/faq-upload-{int(time.time())}.{file_format}"
-        url = self._s3.generate_presigned_url(
-            "put_object",
-            Params={
-                "Bucket": self._bucket,
-                "Key": key,
-                "ContentType": "application/octet-stream",
-            },
-            ExpiresIn=expiry_seconds,
-        )
-        return url
