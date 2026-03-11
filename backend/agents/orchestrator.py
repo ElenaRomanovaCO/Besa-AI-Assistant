@@ -32,19 +32,24 @@ _NOVA_PRO_MODEL_ID = "amazon.nova-pro-v1:0"
 
 _ORCHESTRATOR_SYSTEM_PROMPT = """You are the orchestrator for BeSa AI, an AWS workshop assistant.
 
-You coordinate specialized sub-agents to answer student questions using a waterfall strategy:
-1. FAQ Search (fastest, most accurate) — use invoke_faq_agent first
-2. Discord History Search — use invoke_discord_agent if FAQ confidence < threshold
-3. AWS Reasoning — use invoke_reasoning_agent if Discord confidence < threshold
-4. AWS Documentation — use invoke_aws_docs_agent to search real AWS docs pages via MCP
+You coordinate specialized sub-agents to answer student questions.
 
-CRITICAL — answer quality rules:
-- NEVER copy raw tool output into primary_answer. Always write the answer in your own words.
-- If FAQ returns a relevant result, synthesize a clear, direct answer using that content as context.
-- If the FAQ answer doesn't fully address the specific question asked, supplement with your own AWS knowledge.
-- primary_answer must be clean, natural prose suitable for Discord — no markdown metadata, no "Category:", no "Tags:" lines.
-- Keep answers concise but complete (aim for 3-8 sentences for most questions).
-- Stop the waterfall as soon as a high-confidence answer is found.
+TOOL USAGE RULES:
+- invoke_faq_agent: call ALWAYS first
+- invoke_discord_agent: call if FAQ confidence is below threshold
+- invoke_aws_docs_agent: call for ANY question about specific AWS service APIs, SDK
+  parameter names, IAM actions, service quotas, limits, timeouts, port numbers, or
+  GenAI/rapidly-evolving services (AgentCore, Bedrock, Strands, Nova, Titan, SageMaker).
+  High confidence from invoke_reasoning_agent does NOT exempt you — AI training data
+  may be stale for these services.
+- invoke_reasoning_agent: call for general questions (Jupyter usage, workshop workflow,
+  Python basics) or to synthesize after AWS Docs returns results.
+
+ANSWER QUALITY RULES:
+- NEVER copy raw tool output into primary_answer. Write the answer in your own words.
+- Synthesize a clear, direct answer using tool results as context.
+- primary_answer must be clean prose for Discord — no "Category:", no "Tags:" lines.
+- Keep answers concise (3-8 sentences).
 - Include source attribution in every response.
 
 Response schema (JSON):
@@ -184,10 +189,18 @@ class OrchestratorAgent:
         @tool
         def invoke_aws_docs_agent(question: str) -> str:
             """
-            Search real AWS documentation pages using the AWS Docs MCP server.
-            Uses search_documentation and read_documentation tools to fetch live
-            content from docs.aws.amazon.com and return authoritative answers with URLs.
-            Call this when reasoning needs to be grounded in official documentation.
+            Search real AWS documentation pages for authoritative answers.
+
+            CALL THIS (do NOT skip it) when the question involves ANY of:
+            - AWS service APIs, SDK parameters, IAM actions or policies
+            - Service quotas, limits, timeouts, or port numbers
+            - GenAI/rapidly-evolving services: AgentCore, Bedrock, Strands Agents,
+              Nova, Titan, SageMaker, Guardrails, Knowledge Base
+            - Specific configuration parameter names or API shapes
+            - Container/deployment specifications or required fields
+
+            Do NOT rely on invoke_reasoning_agent alone for these topics — the
+            service may have changed since training data.
 
             Args:
                 question: The student's question
@@ -258,15 +271,24 @@ class OrchestratorAgent:
 
 Student info: user={context.user_name}, channel={context.channel_id}
 
-Execute the waterfall strategy to find the best answer:
-1. Call invoke_faq_agent("{question}")
-2. Check FAQ confidence — if below {int(config.faq_threshold * 100)}%, call invoke_discord_agent
-3. If Discord confidence is below {int(config.discord_overlap_threshold * 100)}%, call invoke_reasoning_agent
-4. AWS Docs rule — ALWAYS call invoke_aws_docs_agent (instead of or after reasoning) if the question:
-   - Mentions any AWS service API, configuration parameter, quota, or limit
-   - Involves GenAI or rapidly-evolving services: Bedrock, AgentCore, Strands Agents, Nova, SageMaker, Titan
-   - Asks about specific feature behaviour, TTL, timeout values, IAM actions, port numbers, or SDK parameters
-   - AI reasoning alone is NOT sufficient for these — the service may have changed since training data
+Follow these steps IN ORDER to find the best answer:
+
+STEP 1 — Always call invoke_faq_agent("{question}") first.
+
+STEP 2 — If FAQ confidence < {int(config.faq_threshold * 100)}%, call invoke_discord_agent.
+
+STEP 3 — Classify the question:
+  TYPE A (specific AWS technical): question involves an AWS service API, SDK parameter name,
+    IAM action, service quota, execution limit, timeout, port number, container spec, or
+    a GenAI/rapidly-evolving service (AgentCore, Bedrock, Strands Agents, Nova, Titan,
+    SageMaker, Guardrails, Knowledge Base).
+  TYPE B (general): workshop workflow, general Jupyter/Python usage, environment setup.
+
+STEP 4 — Based on classification:
+  - TYPE A → call invoke_aws_docs_agent. High reasoning confidence does NOT exempt you
+    from this step — AI training data may be stale for these fast-moving services.
+    Only call invoke_reasoning_agent after if docs are insufficient to synthesize.
+  - TYPE B → call invoke_reasoning_agent.
 
 Return your final response as JSON matching the required schema."""
 
