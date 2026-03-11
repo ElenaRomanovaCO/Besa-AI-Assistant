@@ -198,6 +198,8 @@ class AWSDocsAgent:
             "Route 53", "CloudFront", "VPC", "ALB", "NLB", "ELB",
             "Secrets Manager", "Parameter Store", "KMS", "ACM", "WAF",
             "OpenSearch", "ElastiCache", "Aurora", "Redshift", "Timestream",
+            "AgentCore", "Strands", "Strands Agents", "Nova", "Titan", "Guardrails",
+            "Bedrock Agent", "Knowledge Base", "Bedrock Studio", "Model Catalog",
             "Amplify", "AppSync", "Pinpoint", "Translate", "Textract", "Rekognition",
         ]
 

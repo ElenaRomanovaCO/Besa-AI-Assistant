@@ -89,7 +89,7 @@ class FAQAgent:
                 retrievalConfiguration={
                     "vectorSearchConfiguration": {
                         "numberOfResults": params.top_k,
-                        "overrideSearchType": "SEMANTIC",
+                        "overrideSearchType": "HYBRID",
                     }
                 },
             )

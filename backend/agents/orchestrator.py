@@ -262,7 +262,11 @@ Execute the waterfall strategy to find the best answer:
 1. Call invoke_faq_agent("{question}")
 2. Check FAQ confidence — if below {int(config.faq_threshold * 100)}%, call invoke_discord_agent
 3. If Discord confidence is below {int(config.discord_overlap_threshold * 100)}%, call invoke_reasoning_agent
-4. If reasoning needs documentation support, call invoke_aws_docs_agent
+4. AWS Docs rule — ALWAYS call invoke_aws_docs_agent (instead of or after reasoning) if the question:
+   - Mentions any AWS service API, configuration parameter, quota, or limit
+   - Involves GenAI or rapidly-evolving services: Bedrock, AgentCore, Strands Agents, Nova, SageMaker, Titan
+   - Asks about specific feature behaviour, TTL, timeout values, IAM actions, port numbers, or SDK parameters
+   - AI reasoning alone is NOT sufficient for these — the service may have changed since training data
 
 Return your final response as JSON matching the required schema."""
 
