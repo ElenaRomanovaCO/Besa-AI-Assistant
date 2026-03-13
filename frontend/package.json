@@ -15,7 +15,7 @@
     "react-dom": "^18.3.1",
     "aws-amplify": "^6.4.0",
     "@aws-amplify/ui-react": "^6.3.0",
-    "recharts": "^2.12.7",
+    "recharts": "^3.8.0",
     "swr": "^2.2.5",
     "react-dropzone": "^14.2.3",
     "react-hot-toast": "^2.4.1",
