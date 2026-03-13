@@ -19,7 +19,7 @@
     "swr": "^2.2.5",
     "react-dropzone": "^14.2.3",
     "react-hot-toast": "^2.4.1",
-    "lucide-react": "^0.400.0",
+    "lucide-react": "^0.577.0",
     "clsx": "^2.1.1",
     "tailwind-merge": "^2.4.0",
     "date-fns": "^3.6.0",
