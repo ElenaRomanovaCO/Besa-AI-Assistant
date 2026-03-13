@@ -1,0 +1,128 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint & Type Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install backend dependencies
+        run: |
+          pip install -r backend/requirements.txt
+          pip install -r backend/requirements-dev.txt
+
+      - name: Run flake8
+        run: |
+          cd backend
+          python -m flake8 agents/ handlers/ models/ services/ --max-line-length=100
+
+      - name: Run mypy
+        run: |
+          cd backend
+          python -m mypy agents/ handlers/ models/ services/ --ignore-missing-imports
+
+      - name: Check black formatting
+        run: |
+          cd backend
+          python -m black --check agents/ handlers/ models/ services/
+
+      - name: Check isort
+        run: |
+          cd backend
+          python -m isort --check-only agents/ handlers/ models/ services/
+
+  test:
+    name: Tests & Coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install -r backend/requirements.txt
+          pip install -r backend/requirements-dev.txt
+
+      - name: Run tests with coverage
+        run: |
+          cd backend
+          python -m pytest tests/ -v --tb=short \
+            --cov=backend --cov-report=term-missing \
+            --cov-report=xml:coverage.xml \
+            --cov-fail-under=80
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: backend/coverage.xml
+
+  security:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install pip-audit
+
+      - name: Scan Python dependencies for CVEs
+        run: pip-audit -r backend/requirements.txt
+
+      - name: Scan for secrets in codebase
+        uses: trufflesecurity/trufflehog@main
+        with:
+          extra_args: --only-verified
+
+  frontend:
+    name: Frontend Build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run lint
+        run: npm run lint
+
+      - name: Build
+        run: npm run build
+        env:
+          NEXT_PUBLIC_COGNITO_USER_POOL_ID: placeholder
+          NEXT_PUBLIC_COGNITO_CLIENT_ID: placeholder
+          NEXT_PUBLIC_API_URL: https://placeholder.execute-api.us-east-1.amazonaws.com/prod

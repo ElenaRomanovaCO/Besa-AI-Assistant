@@ -3,7 +3,7 @@
 # build_layer.sh — Build the Lambda dependency layer
 #
 # Installs all packages from backend/requirements.txt into backend/layer/python/
-# so CDK can package them as a Lambda Layer (compatible with Python 3.12 / x86_64).
+# so CDK can package them as a Lambda Layer (compatible with Python 3.12 / arm64).
 #
 # Usage (run from project root OR backend/):
 #   bash backend/scripts/build_layer.sh           # default: Docker build (recommended)

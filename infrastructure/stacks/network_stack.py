@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from aws_cdk import Stack, Tags
 from aws_cdk import aws_ec2 as ec2
+from aws_cdk import aws_logs as logs
 from constructs import Construct
 
 
@@ -47,6 +48,20 @@ class NetworkStack(Stack):
             ],
             enable_dns_hostnames=True,
             enable_dns_support=True,
+        )
+
+        # VPC Flow Logs — network traffic audit trail (CloudWatch Logs)
+        flow_log_group = logs.LogGroup(
+            self,
+            "VPCFlowLogGroup",
+            log_group_name=f"/aws/vpc/{project_name}-flow-logs",
+            retention=logs.RetentionDays.TWO_WEEKS,  # 14 days — sufficient for security audits
+        )
+
+        self.vpc.add_flow_log(
+            "FlowLog",
+            destination=ec2.FlowLogDestination.to_cloud_watch_logs(flow_log_group),
+            traffic_type=ec2.FlowLogTrafficType.REJECT,  # Only rejected traffic (cost + noise reduction)
         )
 
         # VPC Endpoints for AWS service access without NAT (cost saving)
@@ -97,13 +112,9 @@ class NetworkStack(Stack):
             security_groups=[self.lambda_sg],
         )
 
-        # SQS
-        self.vpc.add_interface_endpoint(
-            "SQSEndpoint",
-            service=ec2.InterfaceVpcEndpointAwsService.SQS,
-            subnets=ec2.SubnetSelection(subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS),
-            security_groups=[self.lambda_sg],
-        )
+        # SQS endpoint removed — Lambda SQS event source mapping uses AWS internal
+        # network (not VPC), and publish calls go through NAT Gateway.
+        # Saves ~$7.30/mo. Re-add if SQS call volume exceeds NAT data costs.
 
         Tags.of(self).add("Project", project_name)
         Tags.of(self).add("Component", "Network")

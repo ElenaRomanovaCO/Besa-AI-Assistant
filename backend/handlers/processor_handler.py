@@ -9,13 +9,14 @@ This Lambda can run for up to 15 minutes (configured in CDK).
 from __future__ import annotations
 
 import json
-import logging
 import os
 import time
 import uuid
 from typing import Any
 
 import boto3
+
+from backend.services.powertools import POWERTOOLS_AVAILABLE
 
 from backend.agents.aws_docs_agent import AWSDocsAgent
 from backend.agents.discord_agent import DiscordAgent
@@ -26,10 +27,18 @@ from backend.models.agent_models import BotResponse, ProcessingMessage, Question
 from backend.models.agent_models import WaterfallConfig
 from backend.services.config_service import ConfigService
 from backend.services.discord_service import DiscordService
+from backend.services.output_validator import validate_output
+from backend.services.pii_redactor import redact_pii
 from backend.services.rate_limiter import RateLimiter
 
-logger = logging.getLogger(__name__)
-logger.setLevel(os.environ.get("LOG_LEVEL", "INFO"))
+if POWERTOOLS_AVAILABLE:
+    from backend.services.powertools import logger, tracer, metrics
+else:
+    import logging
+    logger = logging.getLogger(__name__)  # type: ignore[assignment]
+    logger.setLevel(os.environ.get("LOG_LEVEL", "INFO"))  # type: ignore[union-attr]
+    tracer = None  # type: ignore[assignment]
+    metrics = None  # type: ignore[assignment]
 
 # Environment variables
 _BOT_TOKEN_SECRET_ARN = os.environ.get("DISCORD_BOT_TOKEN_SECRET_ARN", "")
@@ -239,8 +248,22 @@ def _post_response_to_discord(
     """
     if bot_response and bot_response.primary_answer:
         answer = bot_response.primary_answer
+        # Validate LLM output before sending to Discord
+        validation = validate_output(answer.answer)
+        if validation.blocked:
+            logger.warning(
+                "Output blocked: reason=%s redactions=%s",
+                validation.block_reason,
+                validation.redactions,
+            )
+            safe_answer = validation.cleaned_text
+        else:
+            safe_answer = validation.cleaned_text
+            if validation.redactions:
+                logger.info("Output redactions applied: %s", validation.redactions)
+
         embed = DiscordService.format_answer_embed(
-            answer=answer.answer,
+            answer=safe_answer,
             source=answer.source_type.value,
             confidence=answer.confidence_score,
             source_urls=answer.source_urls,
@@ -288,15 +311,15 @@ def _log_query(
                 "correlation_id": msg.correlation_id,
                 "user_id": msg.user_id,
                 "user_name": msg.user_name,
-                "question": msg.question[:1000],
+                "question": redact_pii(msg.question[:1000]),
                 "source": bot_response.primary_source.value,
                 "confidence": str(primary.confidence_score if primary else 0),
                 "response_time_ms": processing_time_ms,
                 "waterfall_steps": bot_response.waterfall_steps_executed,
                 "channel_id": msg.channel_id,
                 "guild_id": msg.guild_id,
-                # TTL for 90-day auto-expiry
-                "ttl": int(time.time()) + (90 * 24 * 3600),
+                # TTL for 30-day auto-expiry (sufficient for analytics)
+                "ttl": int(time.time()) + (30 * 24 * 3600),
             }
         )
     except Exception as e:

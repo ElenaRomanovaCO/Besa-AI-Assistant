@@ -32,6 +32,7 @@ from stacks.storage_stack import StorageStack
 from stacks.secrets_stack import SecretsStack
 from stacks.agent_stack import AgentStack
 from stacks.admin_stack import AdminStack
+from stacks.waf_stack import WAFStack
 
 # =========================================================================== #
 # Configuration — update these values before deploying
@@ -50,7 +51,13 @@ DISCORD_BOT_CHANNEL_ID = os.environ.get("DISCORD_BOT_CHANNEL_ID", "REPLACE_ME")
 # Admin UI settings
 ADMIN_EMAIL = "eromanova115@gmail.com"
 
+# Environment (set CDK_STAGE=staging for staging deployment)
+STAGE = os.environ.get("CDK_STAGE", "production")
+
 # =========================================================================== #
+
+# Staging uses a separate prefix to avoid resource name collisions
+STACK_PREFIX = PROJECT_NAME if STAGE == "production" else f"{PROJECT_NAME}-staging"
 
 env = cdk.Environment(account=AWS_ACCOUNT, region=AWS_REGION)
 
@@ -59,8 +66,8 @@ app = cdk.App()
 # Network — VPC with private subnets and VPC endpoints
 network = NetworkStack(
     app,
-    f"{PROJECT_NAME}-network",
-    project_name=PROJECT_NAME,
+    f"{STACK_PREFIX}-network",
+    project_name=STACK_PREFIX,
     env=env,
     description="BeSa AI Assistant — VPC and network infrastructure",
 )
@@ -68,17 +75,17 @@ network = NetworkStack(
 # Secrets — Discord credentials (values set manually post-deploy)
 secrets = SecretsStack(
     app,
-    f"{PROJECT_NAME}-secrets",
-    project_name=PROJECT_NAME,
+    f"{STACK_PREFIX}-secrets",
+    project_name=STACK_PREFIX,
     env=env,
     description="BeSa AI Assistant — Secrets Manager for Discord credentials",
 )
 
-# Storage — S3, DynamoDB, OpenSearch Serverless, Bedrock Knowledge Base
+# Storage — S3, DynamoDB, Bedrock Knowledge Base, Guardrails
 storage = StorageStack(
     app,
-    f"{PROJECT_NAME}-storage",
-    project_name=PROJECT_NAME,
+    f"{STACK_PREFIX}-storage",
+    project_name=STACK_PREFIX,
     env=env,
     description="BeSa AI Assistant — S3, DynamoDB, Bedrock Knowledge Base",
 )
@@ -86,14 +93,17 @@ storage = StorageStack(
 # Agent — Lambda functions, SQS, API Gateway (Discord endpoint)
 agent = AgentStack(
     app,
-    f"{PROJECT_NAME}-agent",
-    project_name=PROJECT_NAME,
+    f"{STACK_PREFIX}-agent",
+    project_name=STACK_PREFIX,
     network=network,
     storage=storage,
     secrets=secrets,
     discord_application_id=DISCORD_APPLICATION_ID,
     discord_guild_id=DISCORD_GUILD_ID,
     discord_bot_channel_id=DISCORD_BOT_CHANNEL_ID,
+    ops_email=ADMIN_EMAIL,
+    guardrail_id=storage.guardrail.attr_guardrail_id,
+    guardrail_version=storage.guardrail_version.attr_version,
     env=env,
     description="BeSa AI Assistant — Lambda agents, SQS queue, Discord API Gateway",
 )
@@ -101,8 +111,8 @@ agent = AgentStack(
 # Admin — Cognito, Admin API, Amplify
 admin = AdminStack(
     app,
-    f"{PROJECT_NAME}-admin",
-    project_name=PROJECT_NAME,
+    f"{STACK_PREFIX}-admin",
+    project_name=STACK_PREFIX,
     network=network,
     storage=storage,
     secrets=secrets,
@@ -114,7 +124,21 @@ admin = AdminStack(
     description="BeSa AI Assistant — Cognito auth, Admin API, Amplify hosting",
 )
 
-# Stack deployment order (CDK infers from cross-stack references, but explicit is clear)
+# WAF — protects both API Gateways
+waf = WAFStack(
+    app,
+    f"{STACK_PREFIX}-waf",
+    project_name=STACK_PREFIX,
+    api_gateway_arns=[
+        # API Gateway stage ARNs (required for WAF association)
+        f"arn:aws:apigateway:{AWS_REGION}::/restapis/{agent.api.rest_api_id}/stages/prod",
+        f"arn:aws:apigateway:{AWS_REGION}::/restapis/{admin.admin_api.rest_api_id}/stages/prod",
+    ],
+    env=env,
+    description="BeSa AI Assistant — WAF protection for API Gateways",
+)
+
+# Stack deployment order
 agent.add_dependency(network)
 agent.add_dependency(storage)
 agent.add_dependency(secrets)
@@ -122,5 +146,7 @@ admin.add_dependency(network)
 admin.add_dependency(storage)
 admin.add_dependency(secrets)
 admin.add_dependency(agent)
+waf.add_dependency(agent)
+waf.add_dependency(admin)
 
 app.synth()

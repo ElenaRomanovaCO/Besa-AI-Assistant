@@ -88,7 +88,7 @@ class StorageStack(Stack):
         )
 
         # ------------------------------------------------------------------ #
-        # DynamoDB — Query Logs Table (TTL for 90-day retention)
+        # DynamoDB — Query Logs Table (TTL for 30-day retention)
         # ------------------------------------------------------------------ #
         self.logs_table = dynamodb.Table(
             self,
@@ -145,6 +145,7 @@ class StorageStack(Stack):
             ),
             billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
             removal_policy=RemovalPolicy.DESTROY,
+            time_to_live_attribute="ttl",  # 7-day TTL for stale poll state cleanup
         )
 
         # ------------------------------------------------------------------ #
@@ -254,6 +255,92 @@ class StorageStack(Stack):
         # recreating via CLI avoids cross-stack export conflicts on updates).
         # DataSource ID 3GXCRPUAIT — FIXED_SIZE 250 tokens, 20% overlap.
         self.faq_data_source_id = "3GXCRPUAIT"
+
+        # ------------------------------------------------------------------ #
+        # Bedrock Guardrail — content filtering for all model invocations
+        # ------------------------------------------------------------------ #
+        self.guardrail = bedrock.CfnGuardrail(
+            self,
+            "ContentGuardrail",
+            name=f"{project_name}-guardrail",
+            description="Content filtering for BeSa AI — blocks harmful content, off-topic requests, PII",
+            blocked_input_messaging=(
+                "I'm sorry, I can only help with AWS workshop questions. "
+                "Please ask about AWS services, workshop exercises, or technical troubleshooting."
+            ),
+            blocked_outputs_messaging=(
+                "I'm unable to provide that response. "
+                "Please rephrase your question about AWS topics."
+            ),
+            # Content filters — block harmful content
+            content_policy_config=bedrock.CfnGuardrail.ContentPolicyConfigProperty(
+                filters_config=[
+                    bedrock.CfnGuardrail.ContentFilterConfigProperty(
+                        type="HATE", input_strength="HIGH", output_strength="HIGH",
+                    ),
+                    bedrock.CfnGuardrail.ContentFilterConfigProperty(
+                        type="INSULTS", input_strength="HIGH", output_strength="HIGH",
+                    ),
+                    bedrock.CfnGuardrail.ContentFilterConfigProperty(
+                        type="SEXUAL", input_strength="HIGH", output_strength="HIGH",
+                    ),
+                    bedrock.CfnGuardrail.ContentFilterConfigProperty(
+                        type="VIOLENCE", input_strength="HIGH", output_strength="HIGH",
+                    ),
+                    bedrock.CfnGuardrail.ContentFilterConfigProperty(
+                        type="MISCONDUCT", input_strength="HIGH", output_strength="HIGH",
+                    ),
+                    bedrock.CfnGuardrail.ContentFilterConfigProperty(
+                        type="PROMPT_ATTACK", input_strength="HIGH", output_strength="NONE",
+                    ),
+                ],
+            ),
+            # Topic denial — block off-topic conversations
+            topic_policy_config=bedrock.CfnGuardrail.TopicPolicyConfigProperty(
+                topics_config=[
+                    bedrock.CfnGuardrail.TopicConfigProperty(
+                        name="PersonalAdvice",
+                        definition="Requests for personal, medical, legal, or financial advice unrelated to AWS",
+                        type="DENY",
+                    ),
+                    bedrock.CfnGuardrail.TopicConfigProperty(
+                        name="PoliticsReligion",
+                        definition="Discussions about politics, religion, or controversial social topics",
+                        type="DENY",
+                    ),
+                    bedrock.CfnGuardrail.TopicConfigProperty(
+                        name="HackingExploits",
+                        definition="Requests to hack systems, exploit vulnerabilities, or bypass security controls in unauthorized ways",
+                        type="DENY",
+                    ),
+                ],
+            ),
+            # Sensitive information — redact PII in outputs
+            sensitive_information_policy_config=bedrock.CfnGuardrail.SensitiveInformationPolicyConfigProperty(
+                pii_entities_config=[
+                    bedrock.CfnGuardrail.PiiEntityConfigProperty(
+                        type="EMAIL", action="ANONYMIZE",
+                    ),
+                    bedrock.CfnGuardrail.PiiEntityConfigProperty(
+                        type="PHONE", action="ANONYMIZE",
+                    ),
+                    bedrock.CfnGuardrail.PiiEntityConfigProperty(
+                        type="AWS_ACCESS_KEY", action="BLOCK",
+                    ),
+                    bedrock.CfnGuardrail.PiiEntityConfigProperty(
+                        type="AWS_SECRET_KEY", action="BLOCK",
+                    ),
+                ],
+            ),
+        )
+
+        # Guardrail version (DRAFT is not usable in production — must create a version)
+        self.guardrail_version = bedrock.CfnGuardrailVersion(
+            self,
+            "GuardrailVersion",
+            guardrail_identifier=self.guardrail.attr_guardrail_id,
+            description="Initial production guardrail version",
+        )
 
         Tags.of(self).add("Project", project_name)
         Tags.of(self).add("Component", "Storage")

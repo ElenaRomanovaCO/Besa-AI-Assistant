@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
 import uuid
 from typing import Any
 
@@ -21,6 +22,7 @@ import boto3
 from backend.models.agent_models import ProcessingMessage
 from backend.services.config_service import ConfigService
 from backend.services.discord_service import DiscordService
+from backend.services.input_sanitizer import sanitize_input
 
 logger = logging.getLogger(__name__)
 logger.setLevel(os.environ.get("LOG_LEVEL", "INFO"))
@@ -90,6 +92,7 @@ def _save_last_message_id(message_id: str) -> None:
                 "pk": f"poll_state#{_BOT_CHANNEL_ID}",
                 "sk": "last_message",
                 "message_id": message_id,
+                "ttl": int(time.time()) + (7 * 24 * 3600),  # 7-day TTL for stale state
             }
         )
     except Exception as e:
@@ -104,6 +107,17 @@ def handler(event: dict, context: Any) -> dict:
     if not _BOT_CHANNEL_ID:
         logger.error("BOT_CHANNEL_ID not configured — skipping poll")
         return {"statusCode": 200, "queued": 0}
+
+    # Check if channel polling is enabled in config (saves compute when idle)
+    config_svc = _get_config_service()
+    try:
+        config = config_svc.load_config()
+        if not config.agents.enable_discord_agent:
+            logger.debug("Channel polling disabled by config — skipping")
+            return {"statusCode": 200, "queued": 0, "skipped": "polling_disabled"}
+    except Exception as e:
+        logger.warning("Failed to load config for poller toggle check: %s", e)
+        # Continue polling if config is unavailable (fail open)
 
     discord = _get_discord_service()
     last_message_id = _get_last_message_id()
@@ -125,13 +139,20 @@ def handler(event: dict, context: Any) -> dict:
     new_last_id = last_message_id
 
     for msg in messages:
-        # Skip short messages (likely not questions)
-        if len(msg.content.strip()) < 10:
+        # Sanitize input — skip short, long, or malicious messages
+        sanitization = sanitize_input(msg.content)
+        if sanitization.should_block:
+            logger.info(
+                "Poller skipped message from %s: %s (pattern=%s)",
+                msg.author_name,
+                sanitization.rejection_reason,
+                sanitization.matched_pattern,
+            )
             continue
 
         correlation_id = str(uuid.uuid4())
         processing_msg = ProcessingMessage(
-            question=msg.content,
+            question=sanitization.cleaned_text,
             user_id=msg.author_id,
             user_name=msg.author_name,
             guild_id=_GUILD_ID,

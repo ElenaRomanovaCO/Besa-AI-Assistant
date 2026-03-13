@@ -15,6 +15,8 @@ from aws_cdk import (
     aws_lambda as lambda_,
     aws_lambda_event_sources as event_sources,
     aws_logs as logs,
+    aws_sns as sns,
+    aws_sns_subscriptions as sns_subs,
     aws_sqs as sqs,
 )
 from constructs import Construct
@@ -47,11 +49,27 @@ class AgentStack(Stack):
         discord_application_id: str,
         discord_guild_id: str,
         discord_bot_channel_id: str,
+        ops_email: str,
+        guardrail_id: str = "",
+        guardrail_version: str = "",
         **kwargs,
     ) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
         self.project_name = project_name
+
+        # ------------------------------------------------------------------ #
+        # SNS Topic — operational alarm notifications
+        # ------------------------------------------------------------------ #
+        self.ops_topic = sns.Topic(
+            self,
+            "OpsAlarmTopic",
+            topic_name=f"{project_name}-ops-alarms",
+            display_name=f"BeSa AI Operational Alarms",
+        )
+        self.ops_topic.add_subscription(
+            sns_subs.EmailSubscription(ops_email)
+        )
 
         # ------------------------------------------------------------------ #
         # Lambda Code Asset — project root, excluding non-backend directories
@@ -100,6 +118,7 @@ class AgentStack(Stack):
             layer_version_name=f"{project_name}-dependencies",
             code=lambda_.Code.from_asset("../backend/layer"),
             compatible_runtimes=[lambda_.Runtime.PYTHON_3_12],
+            compatible_architectures=[lambda_.Architecture.X86_64],
             description="BeSa AI shared dependencies (strands-agents, discord.py, httpx, etc.)",
         )
 
@@ -112,6 +131,7 @@ class AgentStack(Stack):
             queue_name=f"{project_name}-processing-dlq.fifo",
             fifo=True,
             retention_period=Duration.days(14),
+            encryption=sqs.QueueEncryption.SQS_MANAGED,  # SSE-SQS encryption at rest
         )
 
         self.processing_queue = sqs.Queue(
@@ -122,6 +142,7 @@ class AgentStack(Stack):
             content_based_deduplication=True,
             visibility_timeout=Duration.minutes(16),  # > Lambda timeout (15 min)
             retention_period=Duration.hours(4),
+            encryption=sqs.QueueEncryption.SQS_MANAGED,  # SSE-SQS encryption at rest
             dead_letter_queue=sqs.DeadLetterQueue(
                 max_receive_count=3,
                 queue=dead_letter_queue,
@@ -145,12 +166,15 @@ class AgentStack(Stack):
             "BEDROCK_KNOWLEDGE_BASE_ID": storage.knowledge_base.attr_knowledge_base_id,
             "BEDROCK_DATA_SOURCE_ID": storage.faq_data_source_id,
             "FAQ_BUCKET_NAME": storage.faq_bucket.bucket_name,
+            "BEDROCK_GUARDRAIL_ID": guardrail_id,
+            "BEDROCK_GUARDRAIL_VERSION": guardrail_version,
             "LOG_LEVEL": "INFO",
         }
 
         # Common Lambda configuration
         common_lambda_kwargs = dict(
             runtime=lambda_.Runtime.PYTHON_3_12,
+            architecture=lambda_.Architecture.X86_64,  # ~20% cost reduction
             layers=[self.dependencies_layer],
             vpc=network.vpc,
             vpc_subnets=ec2.SubnetSelection(
@@ -172,7 +196,8 @@ class AgentStack(Stack):
             code=lambda_code,
             description="Receives Discord slash command interactions, acks within 3s, queues to SQS",
             timeout=Duration.seconds(10),  # Short — only ack + SQS publish
-            memory_size=256,
+            memory_size=128,  # Minimal: signature verify + SQS publish
+            reserved_concurrent_executions=10,  # Cap concurrent webhook invocations
             **common_lambda_kwargs,
         )
         self._grant_common_permissions(self.webhook_lambda, storage, secrets)
@@ -196,7 +221,8 @@ class AgentStack(Stack):
             code=lambda_code,
             description="Polls bot channel for new messages every 60 seconds",
             timeout=Duration.seconds(30),
-            memory_size=256,
+            memory_size=128,  # Minimal: Discord API fetch + SQS publish
+            reserved_concurrent_executions=2,  # Only 1 runs at a time, 2 for overlap safety
             **common_lambda_kwargs,
         )
         self._grant_common_permissions(self.poller_lambda, storage, secrets)
@@ -224,6 +250,7 @@ class AgentStack(Stack):
             description="Processes questions through multi-agent waterfall, posts Discord response",
             timeout=Duration.minutes(15),  # Max Lambda timeout
             memory_size=2048,  # Agents need more memory
+            reserved_concurrent_executions=10,  # Cap concurrent agent invocations (SQS max_concurrency=5)
             **common_lambda_kwargs,
         )
         self._grant_common_permissions(self.processor_lambda, storage, secrets)
@@ -247,8 +274,34 @@ class AgentStack(Stack):
                     "bedrock:InvokeModelWithResponseStream",
                     "bedrock:Retrieve",
                     "bedrock:RetrieveAndGenerate",
+                    "bedrock:ApplyGuardrail",
                 ],
                 resources=["*"],
+            )
+        )
+
+        # ------------------------------------------------------------------ #
+        # DLQ Processor Lambda — notify users when processing fails
+        # ------------------------------------------------------------------ #
+        self.dlq_lambda = lambda_.Function(
+            self,
+            "DLQLambda",
+            function_name=f"{project_name}-dlq-processor",
+            handler="backend.handlers.dlq_handler.handler",
+            code=lambda_code,
+            description="Processes DLQ messages — notifies users of failed questions",
+            timeout=Duration.seconds(30),
+            memory_size=256,
+            reserved_concurrent_executions=2,  # DLQ processing is low volume
+            **common_lambda_kwargs,
+        )
+        self._grant_common_permissions(self.dlq_lambda, storage, secrets)
+
+        # Trigger DLQ Lambda from the dead letter queue
+        self.dlq_lambda.add_event_source(
+            event_sources.SqsEventSource(
+                dead_letter_queue,
+                batch_size=1,
             )
         )
 
@@ -317,7 +370,7 @@ class AgentStack(Stack):
         # ------------------------------------------------------------------ #
         # CloudWatch Alarms
         # ------------------------------------------------------------------ #
-        self._create_alarms(project_name, dead_letter_queue)
+        self._create_alarms(project_name, dead_letter_queue, self.ops_topic)
 
         # ------------------------------------------------------------------ #
         # CloudWatch Dashboard
@@ -327,11 +380,16 @@ class AgentStack(Stack):
         Tags.of(self).add("Project", project_name)
         Tags.of(self).add("Component", "Agent")
 
-    def _create_alarms(self, project_name: str, dlq: sqs.Queue) -> None:
+    def _create_alarms(
+        self, project_name: str, dlq: sqs.Queue, topic: sns.ITopic
+    ) -> None:
         """Create CloudWatch alarms for error detection and operational health."""
+        import aws_cdk.aws_cloudwatch_actions as cw_actions
+
+        alarm_action = cw_actions.SnsAction(topic)
 
         # Processor Lambda — error count > 3 in any 5-minute window
-        cloudwatch.Alarm(
+        processor_error_alarm = cloudwatch.Alarm(
             self,
             "ProcessorErrorAlarm",
             alarm_name=f"{project_name}-processor-errors",
@@ -345,9 +403,10 @@ class AgentStack(Stack):
             treat_missing_data=cloudwatch.TreatMissingData.NOT_BREACHING,
             comparison_operator=cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
         )
+        processor_error_alarm.add_alarm_action(alarm_action)
 
         # Processor Lambda — P95 duration > 13 minutes (Lambda timeout is 15)
-        cloudwatch.Alarm(
+        processor_duration_alarm = cloudwatch.Alarm(
             self,
             "ProcessorDurationAlarm",
             alarm_name=f"{project_name}-processor-duration",
@@ -361,9 +420,10 @@ class AgentStack(Stack):
             treat_missing_data=cloudwatch.TreatMissingData.NOT_BREACHING,
             comparison_operator=cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
         )
+        processor_duration_alarm.add_alarm_action(alarm_action)
 
         # Webhook Lambda — error count > 1 in any 1-minute window
-        cloudwatch.Alarm(
+        webhook_error_alarm = cloudwatch.Alarm(
             self,
             "WebhookErrorAlarm",
             alarm_name=f"{project_name}-webhook-errors",
@@ -377,9 +437,10 @@ class AgentStack(Stack):
             treat_missing_data=cloudwatch.TreatMissingData.NOT_BREACHING,
             comparison_operator=cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
         )
+        webhook_error_alarm.add_alarm_action(alarm_action)
 
         # SQS DLQ — any message visible means processing failed after 3 retries
-        cloudwatch.Alarm(
+        dlq_alarm = cloudwatch.Alarm(
             self,
             "DLQAlarm",
             alarm_name=f"{project_name}-dlq-messages",
@@ -393,9 +454,10 @@ class AgentStack(Stack):
             treat_missing_data=cloudwatch.TreatMissingData.NOT_BREACHING,
             comparison_operator=cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
         )
+        dlq_alarm.add_alarm_action(alarm_action)
 
         # API Gateway — 5xx error rate > 5% over 5 minutes
-        cloudwatch.Alarm(
+        api_5xx_alarm = cloudwatch.Alarm(
             self,
             "APIGateway5xxAlarm",
             alarm_name=f"{project_name}-api-5xx",
@@ -409,6 +471,7 @@ class AgentStack(Stack):
             treat_missing_data=cloudwatch.TreatMissingData.NOT_BREACHING,
             comparison_operator=cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
         )
+        api_5xx_alarm.add_alarm_action(alarm_action)
 
     def _create_dashboard(self, project_name: str, dlq: sqs.Queue) -> None:
         """Create a CloudWatch dashboard for operational monitoring."""

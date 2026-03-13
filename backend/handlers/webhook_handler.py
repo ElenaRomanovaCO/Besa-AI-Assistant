@@ -21,7 +21,9 @@ import boto3
 
 from backend.models.discord_models import InteractionContext, InteractionType
 from backend.models.agent_models import ProcessingMessage
+from backend.services.abuse_detector import AbuseDetector
 from backend.services.discord_service import DiscordService
+from backend.services.input_sanitizer import sanitize_input
 
 logger = logging.getLogger(__name__)
 logger.setLevel(os.environ.get("LOG_LEVEL", "INFO"))
@@ -32,11 +34,13 @@ _PUBLIC_KEY_SECRET_ARN = os.environ.get("DISCORD_PUBLIC_KEY_SECRET_ARN", "")
 _APPLICATION_ID = os.environ.get("DISCORD_APPLICATION_ID", "")
 _GUILD_ID = os.environ.get("DISCORD_GUILD_ID", "")
 _SQS_QUEUE_URL = os.environ.get("PROCESSING_QUEUE_URL", "")
+_RATE_LIMIT_TABLE = os.environ.get("RATE_LIMIT_TABLE_NAME", "")
 
 # Cached clients (reused across Lambda warm invocations)
 _secrets_client = boto3.client("secretsmanager")
 _sqs_client = boto3.client("sqs")
 _discord_service: DiscordService | None = None
+_abuse_detector: AbuseDetector | None = None
 
 
 def _get_discord_service() -> DiscordService:
@@ -51,6 +55,14 @@ def _get_discord_service() -> DiscordService:
             public_key=public_key,
         )
     return _discord_service
+
+
+def _get_abuse_detector() -> AbuseDetector:
+    """Lazy-init abuse detector, reusing rate-limit table."""
+    global _abuse_detector
+    if _abuse_detector is None and _RATE_LIMIT_TABLE:
+        _abuse_detector = AbuseDetector(_RATE_LIMIT_TABLE)
+    return _abuse_detector
 
 
 def _get_secret(secret_arn: str) -> str:
@@ -128,6 +140,50 @@ def _handle_slash_command(payload: dict, discord: DiscordService) -> dict:
     if not question:
         # Commands like /faq and /help are handled with immediate responses
         return _handle_info_command(command_name, interaction)
+
+    # Check if user is abuse-blocked (repeat injection offender)
+    abuse = _get_abuse_detector()
+    if abuse:
+        abuse_status = abuse.is_blocked(interaction.user_id)
+        if abuse_status.is_blocked:
+            logger.warning("Abuse-blocked user attempted question: user=%s", interaction.user_name)
+            return {
+                "statusCode": 200,
+                "headers": {"Content-Type": "application/json"},
+                "body": json.dumps({
+                    "type": 4,
+                    "data": {
+                        "content": "Your access is temporarily restricted. Please try again later.",
+                        "flags": 64,
+                    },
+                }),
+            }
+
+    # Sanitize user input — block prompt injection attempts
+    sanitization = sanitize_input(question)
+    if sanitization.should_block:
+        logger.warning(
+            "Input blocked: user=%s reason=%s pattern=%s",
+            interaction.user_name,
+            sanitization.rejection_reason,
+            sanitization.matched_pattern,
+        )
+        # Record injection attempt for abuse tracking
+        if abuse and sanitization.matched_pattern:
+            abuse.record_attempt(interaction.user_id, sanitization.matched_pattern)
+
+        return {
+            "statusCode": 200,
+            "headers": {"Content-Type": "application/json"},
+            "body": json.dumps({
+                "type": 4,
+                "data": {
+                    "content": "I can't process that input. Please ask a question about AWS services or your workshop.",
+                    "flags": 64,  # Ephemeral — only visible to the sender
+                },
+            }),
+        }
+    question = sanitization.cleaned_text
 
     logger.info(
         "Slash command: /%s from user=%s correlation_id will be assigned",

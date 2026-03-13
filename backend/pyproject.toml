@@ -8,7 +8,7 @@ addopts = [
     "--cov=backend",
     "--cov-report=term-missing",
     "--cov-report=html:coverage_html",
-    "--cov-fail-under=60",
+    "--cov-fail-under=80",
     "-v",
 ]
 

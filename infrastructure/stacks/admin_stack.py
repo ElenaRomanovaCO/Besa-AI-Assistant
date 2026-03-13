@@ -68,7 +68,7 @@ class AdminStack(Stack):
             ),
             account_recovery=cognito.AccountRecovery.EMAIL_ONLY,
             removal_policy=RemovalPolicy.RETAIN,
-            mfa=cognito.Mfa.OPTIONAL,
+            mfa=cognito.Mfa.REQUIRED,
             mfa_second_factor=cognito.MfaSecondFactor(otp=True, sms=False),
             email=cognito.UserPoolEmail.with_cognito(),
         )
@@ -103,9 +103,9 @@ class AdminStack(Stack):
                 user_password=False,  # SRP only, not raw password
             ),
             prevent_user_existence_errors=True,
-            id_token_validity=Duration.hours(8),
-            access_token_validity=Duration.hours(8),
-            refresh_token_validity=Duration.days(30),
+            id_token_validity=Duration.hours(1),
+            access_token_validity=Duration.hours(1),
+            refresh_token_validity=Duration.days(7),
             generate_secret=False,  # Public client (SPA), no client secret
         )
 
@@ -161,6 +161,7 @@ class AdminStack(Stack):
             function_name=f"{project_name}-admin-api",
             handler="backend.handlers.admin_handler.handler",
             runtime=lambda_.Runtime.PYTHON_3_12,
+            architecture=lambda_.Architecture.X86_64,
             layers=[dependencies_layer],
             code=lambda_.Code.from_asset(
                 "..",
@@ -176,7 +177,7 @@ class AdminStack(Stack):
             ),
             description="BeSa AI admin REST API handler",
             timeout=Duration.seconds(30),
-            memory_size=512,
+            memory_size=256,  # DynamoDB CRUD + S3 operations
             environment=admin_env,
             tracing=lambda_.Tracing.ACTIVE,
         )
@@ -235,10 +236,7 @@ class AdminStack(Stack):
                 metrics_enabled=True,
             ),
             default_cors_preflight_options=apigw.CorsOptions(
-                allow_origins=[
-                    "https://main.d11zobutovmg96.amplifyapp.com",
-                    "http://localhost:3000",
-                ],
+                allow_origins=self._get_cors_origins(),
                 allow_methods=apigw.Cors.ALL_METHODS,
                 allow_headers=["Content-Type", "Authorization"],
             ),
@@ -326,6 +324,18 @@ class AdminStack(Stack):
 
         Tags.of(self).add("Project", project_name)
         Tags.of(self).add("Component", "Admin")
+
+    def _get_cors_origins(self) -> list[str]:
+        """Return CORS origins based on environment.
+
+        Set the Amplify domain via CDK context: -c amplify_domain=https://main.<id>.amplifyapp.com
+        Set ENABLE_LOCAL_CORS=true in CDK context for local development.
+        """
+        amplify_domain = self.node.try_get_context("amplify_domain")
+        origins = [amplify_domain] if amplify_domain else []
+        if self.node.try_get_context("enable_local_cors") == "true":
+            origins.append("http://localhost:3000")
+        return origins
 
     def _add_route(
         self,
