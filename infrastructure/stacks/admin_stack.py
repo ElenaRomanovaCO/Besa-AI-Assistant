@@ -42,7 +42,6 @@ class AdminStack(Stack):
         admin_email: str,
         discord_application_id: str,
         discord_guild_id: str,
-        dependencies_layer,
         **kwargs,
     ) -> None:
         super().__init__(scope, construct_id, **kwargs)
@@ -155,6 +154,16 @@ class AdminStack(Stack):
             "LOG_LEVEL": "INFO",
         }
 
+        # Own layer to avoid cross-stack export issues on layer updates
+        admin_layer = lambda_.LayerVersion(
+            self,
+            "AdminDependenciesLayer",
+            layer_version_name=f"{project_name}-admin-deps",
+            code=lambda_.Code.from_asset("../backend/layer"),
+            compatible_runtimes=[lambda_.Runtime.PYTHON_3_12],
+            description="Admin API shared dependencies",
+        )
+
         self.admin_lambda = lambda_.Function(
             self,
             "AdminLambda",
@@ -162,7 +171,7 @@ class AdminStack(Stack):
             handler="backend.handlers.admin_handler.handler",
             runtime=lambda_.Runtime.PYTHON_3_12,
             architecture=lambda_.Architecture.X86_64,
-            layers=[dependencies_layer],
+            layers=[admin_layer],
             code=lambda_.Code.from_asset(
                 "..",
                 exclude=[
@@ -331,8 +340,11 @@ class AdminStack(Stack):
         Set the Amplify domain via CDK context: -c amplify_domain=https://main.<id>.amplifyapp.com
         Set ENABLE_LOCAL_CORS=true in CDK context for local development.
         """
-        amplify_domain = self.node.try_get_context("amplify_domain")
-        origins = [amplify_domain] if amplify_domain else []
+        amplify_domain = (
+            self.node.try_get_context("amplify_domain")
+            or "https://main.d11zobutovmg96.amplifyapp.com"
+        )
+        origins = [amplify_domain]
         if self.node.try_get_context("enable_local_cors") == "true":
             origins.append("http://localhost:3000")
         return origins

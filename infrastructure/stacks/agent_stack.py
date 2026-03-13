@@ -118,7 +118,6 @@ class AgentStack(Stack):
             layer_version_name=f"{project_name}-dependencies",
             code=lambda_.Code.from_asset("../backend/layer"),
             compatible_runtimes=[lambda_.Runtime.PYTHON_3_12],
-            compatible_architectures=[lambda_.Architecture.X86_64],
             description="BeSa AI shared dependencies (strands-agents, discord.py, httpx, etc.)",
         )
 
@@ -197,7 +196,7 @@ class AgentStack(Stack):
             description="Receives Discord slash command interactions, acks within 3s, queues to SQS",
             timeout=Duration.seconds(10),  # Short — only ack + SQS publish
             memory_size=128,  # Minimal: signature verify + SQS publish
-            reserved_concurrent_executions=10,  # Cap concurrent webhook invocations
+            # reserved_concurrent_executions=10,  # Disabled: account concurrency quota too low for beta
             **common_lambda_kwargs,
         )
         self._grant_common_permissions(self.webhook_lambda, storage, secrets)
@@ -222,7 +221,7 @@ class AgentStack(Stack):
             description="Polls bot channel for new messages every 60 seconds",
             timeout=Duration.seconds(30),
             memory_size=128,  # Minimal: Discord API fetch + SQS publish
-            reserved_concurrent_executions=2,  # Only 1 runs at a time, 2 for overlap safety
+            # reserved_concurrent_executions=2,  # Disabled: account concurrency quota too low for beta
             **common_lambda_kwargs,
         )
         self._grant_common_permissions(self.poller_lambda, storage, secrets)
@@ -250,7 +249,7 @@ class AgentStack(Stack):
             description="Processes questions through multi-agent waterfall, posts Discord response",
             timeout=Duration.minutes(15),  # Max Lambda timeout
             memory_size=2048,  # Agents need more memory
-            reserved_concurrent_executions=10,  # Cap concurrent agent invocations (SQS max_concurrency=5)
+            # reserved_concurrent_executions=10,  # Disabled: account concurrency quota too low for beta
             **common_lambda_kwargs,
         )
         self._grant_common_permissions(self.processor_lambda, storage, secrets)
@@ -292,7 +291,7 @@ class AgentStack(Stack):
             description="Processes DLQ messages — notifies users of failed questions",
             timeout=Duration.seconds(30),
             memory_size=256,
-            reserved_concurrent_executions=2,  # DLQ processing is low volume
+            # reserved_concurrent_executions=2,  # Disabled: account concurrency quota too low for beta
             **common_lambda_kwargs,
         )
         self._grant_common_permissions(self.dlq_lambda, storage, secrets)

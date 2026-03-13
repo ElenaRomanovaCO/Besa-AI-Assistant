@@ -119,7 +119,6 @@ admin = AdminStack(
     admin_email=ADMIN_EMAIL,
     discord_application_id=DISCORD_APPLICATION_ID,
     discord_guild_id=DISCORD_GUILD_ID,
-    dependencies_layer=agent.dependencies_layer,
     env=env,
     description="BeSa AI Assistant — Cognito auth, Admin API, Amplify hosting",
 )
@@ -145,7 +144,7 @@ agent.add_dependency(secrets)
 admin.add_dependency(network)
 admin.add_dependency(storage)
 admin.add_dependency(secrets)
-admin.add_dependency(agent)
+# admin no longer depends on agent (has its own layer)
 waf.add_dependency(agent)
 waf.add_dependency(admin)
 
