@@ -31,7 +31,8 @@ export default function LoginPage() {
     }
   }
 
-  function handleSignInResult(result: { isSignedIn: boolean; nextStep?: { signInStep?: string } }) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function handleSignInResult(result: any) {
     const nextStep = result.nextStep?.signInStep;
 
     if (result.isSignedIn) {
@@ -47,7 +48,20 @@ export default function LoginPage() {
     }
 
     if (nextStep === "CONTINUE_SIGN_IN_WITH_TOTP_SETUP") {
-      setupTotp();
+      // During sign-in, TOTP setup details come from the sign-in result
+      const totpSetupDetails = result.nextStep?.totpSetupDetails;
+      if (totpSetupDetails) {
+        const uri = totpSetupDetails.getSetupUri("BeSa AI Admin", email);
+        setTotpUri(uri.toString());
+      } else {
+        // Fallback: extract shared secret if getSetupUri not available
+        const secret = totpSetupDetails?.sharedSecret || result.nextStep?.sharedSecret;
+        if (secret) {
+          setTotpUri(`otpauth://totp/BeSa%20AI%20Admin:${encodeURIComponent(email)}?secret=${secret}&issuer=BeSa%20AI%20Admin`);
+        }
+      }
+      setStep("mfa-setup");
+      setLoading(false);
       return;
     }
 
@@ -60,21 +74,6 @@ export default function LoginPage() {
     // Fallback for unknown steps
     toast.error(`Unexpected auth step: ${nextStep}`);
     setLoading(false);
-  }
-
-  async function setupTotp() {
-    try {
-      const { setUpTOTP } = await import("aws-amplify/auth");
-      const totpSetup = await setUpTOTP();
-      const uri = totpSetup.getSetupUri("BeSa AI Admin", email);
-      setTotpUri(uri.toString());
-      setStep("mfa-setup");
-      setLoading(false);
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : "Failed to set up MFA";
-      toast.error(message);
-      setLoading(false);
-    }
   }
 
   async function handleNewPassword(e: React.FormEvent) {
